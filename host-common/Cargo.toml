@@ -1,0 +1,45 @@
+[package]
+name = "ckb-zkvm-host-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Shared library
+ckb-zkvm-lib = { workspace = true }
+
+# CKB types and RPC
+ckb-jsonrpc-types = "1.0"
+ckb-types = "1.0"
+
+# CKB script execution for trace collection
+ckb-script = "1.0"
+ckb-traits = "1.0"
+ckb-mock-tx-types = { git = "https://github.com/nervosnetwork/ckb-vm-contrib.git" }
+
+# CKB VM contrib - collectors for trace generation
+ckb-vm-contrib-collectors = { git = "https://github.com/nervosnetwork/ckb-vm-contrib.git", package = "ckb-vm-syscall-tracer" }
+
+# CKB VM (for types used by executor)
+ckb-vm = { workspace = true }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client for RPC
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+prost = { workspace = true }
+hex = { workspace = true }
+
+# Collections
+indexmap = "2"
+
+# Logging
+tracing = "0.1"
+
+# Error handling
+anyhow = "1"

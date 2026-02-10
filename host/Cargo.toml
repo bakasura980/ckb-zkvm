@@ -1,0 +1,54 @@
+[package]
+name = "ckb-zkvm-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "prove"
+path = "src/bin/prove.rs"
+
+[[bin]]
+name = "verify"
+path = "src/bin/verify.rs"
+
+[[bin]]
+name = "vkey"
+path = "src/bin/vkey.rs"
+
+[[bin]]
+name = "scan"
+path = "src/bin/scan.rs"
+
+[dependencies]
+# Shared libraries
+ckb-zkvm-lib = { workspace = true }
+ckb-zkvm-host-common = { workspace = true }
+
+# SP1 SDK for proving and verification
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", tag = "v4.0.0" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+bincode = { workspace = true }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Environment
+dotenvy = "0.15"
+
+# Error handling
+anyhow = "1"
+
+[build-dependencies]
+sp1-build = { git = "https://github.com/succinctlabs/sp1", tag = "v4.0.0" }

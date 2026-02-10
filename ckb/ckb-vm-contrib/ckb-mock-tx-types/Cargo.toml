@@ -1,0 +1,15 @@
+[package]
+name = "ckb-mock-tx-types"
+description = "CKB mock transaction types"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ckb-jsonrpc-types.workspace = true
+ckb-traits.workspace = true
+ckb-types.workspace = true
+serde.workspace = true

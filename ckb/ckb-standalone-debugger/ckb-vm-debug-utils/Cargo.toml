@@ -1,0 +1,22 @@
+[package]
+name = "ckb-vm-debug-utils"
+version.workspace = true
+authors = ["Xuejie Xiao <xxuejie@gmail.com>"]
+edition = "2024"
+description = "Utils for ckb-debugger"
+license = "MIT"
+
+[features]
+default = []
+stdio = ["libc", "nix"]
+
+[dependencies]
+byteorder.workspace = true
+bytes.workspace = true
+ckb-vm.workspace = true
+libc = { workspace = true, optional = true }
+log.workspace = true
+nix = { workspace = true, optional = true }
+gdbstub.workspace = true
+gdbstub_arch.workspace = true
+env_logger.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "ckb-zkvm-guest-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Shared library
+ckb-zkvm-lib = { workspace = true }
+
+# CKB VM
+ckb-vm = { workspace = true }
+
+# CKB VM replay implementation from ckb-vm-contrib
+protobuf-ckb-syscalls = { git = "https://github.com/nervosnetwork/ckb-vm-contrib.git" }
+
+# CKB VM fuzzing utilities - provides SynchronousSyscalls
+ckb-vm-fuzzing-utils = { git = "https://github.com/nervosnetwork/ckb-vm-contrib.git" }

@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "lib",
+    "host-common",
+    "guest-common",
+    "program",
+    "host",
+]
+exclude = [
+    "program-64",
+    "program-64-parallel/script-prover",
+    "program-64-parallel/aggregation",
+    "host-64",
+    "host-64-parallel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/nervosnetwork/ckb-zkvm"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost = "0.13"
+bincode = "1"
+
+# Crypto
+hex = "0.4"
+
+# CKB VM - patched local version with rand 0.8 for RISC-V/SP1 compatibility
+ckb-vm = { path = "ckb/ckb-vm" }
+
+# CKB standard library
+ckb-std = { version = "0.16", default-features = false }
+
+# Internal crates
+ckb-zkvm-lib = { path = "lib" }
+ckb-zkvm-host-common = { path = "host-common" }
+
+# Note: protobuf-ckb-syscalls from ckb-vm-contrib is referenced directly
+# in program/Cargo.toml since it requires specific workspace setup
+
+# Patch ckb-vm to use local version with rand 0.8 (for getrandom RISC-V support)
+[patch.crates-io]
+ckb-vm = { path = "ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm.git"]
+ckb-vm = { path = "ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm-contrib.git"]
+protobuf-ckb-syscalls = { path = "ckb/ckb-vm-contrib/protobuf-ckb-syscalls" }
+ckb-vm-fuzzing-utils = { path = "ckb/ckb-vm-contrib/ckb-vm-fuzzing-utils" }

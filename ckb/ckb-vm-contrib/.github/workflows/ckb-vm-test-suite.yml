@@ -1,0 +1,39 @@
+name: ckb-vm-test-suite
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: ["ckb-vm-test-suite/**", "Cargo.toml", "Cargo.lock"]
+  push:
+    branches: [ main ]
+    paths: ["ckb-vm-test-suite/**", "Cargo.toml", "Cargo.lock"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup Clang
+      run: |
+        clang --version
+    - name: Setup Rust Target
+      run: |
+        rustup target add riscv64imac-unknown-none-elf
+    - name: Setup RISC-V GCC Toolchain
+      run: |
+        cd ckb-vm-test-suite
+        docker run --rm -v $(pwd):/code nervos/ckb-riscv-gnu-toolchain:bionic-20210804 cp -r /riscv /code/
+    - name: Build Programs
+      run: |
+        cd ckb-vm-test-suite/programs
+        make build
+    - name: Build Bench
+      run: |
+        cd ckb-vm-test-suite
+        cargo build --bench algorithm
+    - name: Run Test
+      run: |
+        cd ckb-vm-test-suite
+        RISCV=$(pwd)/riscv bash test.sh

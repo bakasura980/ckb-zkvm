@@ -1,0 +1,28 @@
+name: Cargo Publish ckb-x64-simulator
+
+on:
+  push:
+    tags:
+      - 'ckb-x64-simulator-v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # Required for OIDC token exchange
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup Clang
+      run: |
+        clang --version
+    - name: Setup Rust Target
+      run: |
+        rustup target add riscv64imac-unknown-none-elf
+    - uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+    - run: |
+        cd ckb-x64-simulator && cargo publish
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

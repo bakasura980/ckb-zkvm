@@ -1,0 +1,24 @@
+name: spike-sys
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: ["spike-sys/**", "Cargo.toml", "Cargo.lock"]
+  push:
+    branches: [ main ]
+    paths: ["spike-sys/**", "Cargo.toml", "Cargo.lock"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Steup Device Tree Compiler
+      run: |
+        sudo apt install device-tree-compiler
+    - name: Build
+      run: |
+        cd spike-sys
+        cargo build

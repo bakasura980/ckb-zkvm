@@ -1,0 +1,24 @@
+name: ckb-vm-syscall-tracer
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: ["ckb-vm-syscall-tracer/**", "Cargo.toml", "Cargo.lock"]
+  push:
+    branches: [ main ]
+    paths: ["ckb-vm-syscall-tracer/**", "Cargo.toml", "Cargo.lock"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup
+      run: |
+        sudo apt install -y protobuf-compiler
+    - name: Build
+      run: |
+        cd ckb-vm-syscall-tracer
+        cargo build

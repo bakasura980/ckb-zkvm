@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+  "ckb-mock-tx-types",
+  "ckb-script-size-analyzer",
+  "ckb-vm-fuzzing-utils",
+  "ckb-vm-syscall-tracer",
+  "ckb-vm-test-suite",
+  "ckb-x64-simulator",
+  "protobuf-ckb-syscalls",
+]
+exclude = ["deps/ckb-vm"]
+
+[workspace.package]
+version = "1.0.0"
+license = "MIT"
+edition = "2024"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+
+[workspace.dependencies]
+# CKB dependencies
+ckb-chain-spec = "1.0.0"
+ckb-jsonrpc-types = "1.0.0"
+ckb-script = "1.0.0"
+ckb-std = { version = "=1.0.1", features = ["stub-syscalls"] }
+ckb-traits = "1.0.0"
+ckb-types = "1.0.0"
+ckb-vm = { version = "=0.24.14", features=["pprof"] }
+
+# Crates defined in current workspace
+ckb-mock-tx-types = { path = "ckb-mock-tx-types", version = "1.0.0" }
+ckb-script-size-analyzer = { path = "ckb-script-size-analyzer", version = "1.0.0" }
+ckb-vm-fuzzing-utils = { path = "ckb-vm-fuzzing-utils", version = "1.0.0" }
+ckb-vm-syscall-tracer = { path = "ckb-vm-syscall-tracer", version = "1.0.0" }
+ckb-x64-simulator = { path = "ckb-x64-simulator", version = "1.0.0" }
+protobuf-ckb-syscalls = { path = "protobuf-ckb-syscalls", version = "1.0.0" }
+
+# Other common crates
+clap = { version = "4.5.40", features = ["cargo", "derive"] }
+criterion = "0.5.1"
+hex = "0.4"
+object = "0.37.1"
+once_cell = "1.13.0"
+prost = "0.14.1"
+prost-build = "0.14.1"
+prost-reflect = { version = "0.16.0", features = ["derive", "text-format"] }
+prost-reflect-build = "0.16.0"
+rand = "0.9"
+regex = { version = "1.11.1", default-features = false }
+rustc-demangle = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_derive = "1.0"
+serde_json = "1.0"
+spin = { version = "0.10.0", default-features = false, features = ["spin_mutex"] }

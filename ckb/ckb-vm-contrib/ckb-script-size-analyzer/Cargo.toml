@@ -1,0 +1,11 @@
+[package]
+name = "ckb-script-size-analyzer"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap.workspace = true
+object.workspace = true
+rustc-demangle.workspace = true

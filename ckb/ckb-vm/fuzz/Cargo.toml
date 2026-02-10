@@ -1,0 +1,55 @@
+[package]
+name = "ckb-vm-fuzz"
+version = "0.1.0"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+spike-sys = "0.1.2"
+ckb-vm = { path = "..", features = ["asm"] }
+ckb-vm-definitions = { path = "../definitions" }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "asm"
+path = "fuzz_targets/asm.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "interpreter"
+path = "fuzz_targets/interpreter.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "isa_a"
+path = "fuzz_targets/isa_a.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "isa_b"
+path = "fuzz_targets/isa_b.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "snapshot"
+path = "fuzz_targets/snapshot.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "snapshot2"
+path = "fuzz_targets/snapshot2.rs"
+test = false
+doc = false

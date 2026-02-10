@@ -1,0 +1,10 @@
+[package]
+name = "ckb-std-wrapper"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+native-simulator = ["ckb-std/native-simulator"]
+
+[dependencies]
+ckb-std = "0.17.2"

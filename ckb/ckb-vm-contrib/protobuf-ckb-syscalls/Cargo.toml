@@ -1,0 +1,29 @@
+[package]
+name = "protobuf-ckb-syscalls"
+description = "Provides protobuf format for syscalls"
+version = "1.0.0"
+license = "MIT"
+edition = "2024"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+
+[dependencies]
+ckb-vm-fuzzing-utils = { path = "../ckb-vm-fuzzing-utils", version = "1.0.0" }
+ckb-vm = { version = "=0.24.14", features = ["pprof"] }
+ckb-std = { version = "=1.0.1", default-features = false, features = ["stub-syscalls"] }
+
+once_cell = "1.13.0"
+prost = "0.14.1"
+prost-reflect = { version = "0.16.0", features = ["derive", "text-format"] }
+spin = { version = "0.10.0", default-features = false, features = ["spin_mutex"] }
+
+
+[build-dependencies]
+prost-build = "0.14.1"
+prost-reflect-build = "0.16.0"
+
+[features]
+default = ["std", "stub-c-syscalls"]
+std = []
+stub-c-syscalls = ["ckb-std/stub-c-syscalls"]
+text-format = []
+print-debug-messages = ["std"]

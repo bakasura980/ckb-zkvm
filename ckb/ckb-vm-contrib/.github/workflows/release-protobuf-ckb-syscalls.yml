@@ -1,0 +1,25 @@
+name: Cargo Publish protobuf-ckb-syscalls
+
+on:
+  push:
+    tags:
+      - 'protobuf-ckb-syscalls-v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # Required for OIDC token exchange
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup
+      run: |
+        sudo apt install -y protobuf-compiler
+    - uses: rust-lang/crates-io-auth-action@v1
+      id: auth
+    - run: |
+        cd protobuf-ckb-syscalls && cargo publish
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

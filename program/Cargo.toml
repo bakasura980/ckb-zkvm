@@ -1,0 +1,23 @@
+[package]
+name = "ckb-zkvm-program"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# SP1 zkVM runtime
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", tag = "v4.0.0" }
+
+# Shared libraries
+ckb-zkvm-lib = { path = "../lib" }
+ckb-zkvm-guest-common = { path = "../guest-common" }
+
+# Serialization
+serde = { workspace = true }
+prost = { workspace = true }
+
+# CKB standard library - syscall traits
+ckb-std = { workspace = true }
+
+[features]
+default = []

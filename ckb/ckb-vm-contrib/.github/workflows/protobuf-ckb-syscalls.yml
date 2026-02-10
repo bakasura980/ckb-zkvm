@@ -1,0 +1,24 @@
+name: protobuf-ckb-syscalls
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: ["protobuf-ckb-syscalls/**", "Cargo.toml", "Cargo.lock"]
+  push:
+    branches: [ main ]
+    paths: ["protobuf-ckb-syscalls/**", "Cargo.toml", "Cargo.lock"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Setup
+      run: |
+        sudo apt install -y protobuf-compiler
+    - name: Build
+      run: |
+        cd protobuf-ckb-syscalls
+        cargo build

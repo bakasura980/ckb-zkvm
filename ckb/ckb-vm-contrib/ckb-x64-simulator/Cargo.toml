@@ -1,0 +1,24 @@
+[package]
+name = "ckb-x64-simulator"
+description = "A simulator that allows running CKB smart contracts on x64 environment for tooling benefits"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+ckb-mock-tx-types.workspace = true
+ckb-types.workspace = true
+faster-hex = "0.6.1"
+lazy_static = "1.4"
+libc = "0.2"
+libloading = "0.8.4"
+serde.workspace = true
+serde_derive.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cc = "1.0"

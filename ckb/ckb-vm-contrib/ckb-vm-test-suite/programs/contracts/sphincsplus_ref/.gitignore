@@ -1,0 +1,8 @@
+/compiler-rt-builtins-riscv
+/musl
+/scripts
+/sphincsplus
+/sphincsplus_ref_ckbvm
+/sphincsplus_ref_data.h
+/sphincsplus_ref_native
+/sphincsplus_ref_sign

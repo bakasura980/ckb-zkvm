@@ -1,0 +1,20 @@
+[package]
+name = "ckb-vm-test-suite"
+description = "CKB-VM benchmark runner"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[features]
+default = ["ckb-vm/asm"]
+
+[dependencies]
+ckb-vm = { path = "../deps/ckb-vm" }
+criterion.workspace = true
+rand.workspace = true
+
+[[bench]]
+name = "algorithm"
+path = "benches/algorithm.rs"
+harness = false

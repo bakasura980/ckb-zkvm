@@ -1,0 +1,182 @@
+syntax = "proto3";
+
+package ckb_zkvm;
+
+// ExecutionTrace captures all VM state needed for deterministic replay.
+// This is the top-level container passed from Host to Guest.
+message ExecutionTrace {
+    // Transaction hash being proven (32 bytes)
+    bytes tx_hash = 1;
+
+    // Main script ELF binary
+    bytes elf = 2;
+
+    // Script arguments (argv for the program)
+    repeated bytes args = 3;
+
+    // Recorded syscall trace - compatible with ckb-vm-contrib format
+    // This is the serialized Syscalls message from ckb-vm-contrib
+    bytes syscall_trace = 4;
+
+    // VM creation events (for spawn syscalls)
+    repeated VmCreation vm_creations = 5;
+
+    // Script hash being executed
+    bytes script_hash = 6;
+
+    // Script group type (Lock = 0, Type = 1)
+    uint32 script_group_type = 7;
+}
+
+// VmCreation records a VM instantiation event.
+// Used for tracking spawned child VMs during execution.
+message VmCreation {
+    // Unique ID for this VM instance
+    uint64 vm_id = 1;
+
+    // Generation ID for this VM
+    uint64 generation_id = 2;
+
+    // Parent VM ID (absent for root VM)
+    optional uint64 parent_vm_id = 3;
+
+    // How to locate the binary for this VM
+    BinaryLocator binary_locator = 4;
+}
+
+// BinaryLocator specifies how to find the ELF binary for a VM.
+message BinaryLocator {
+    // Locator type
+    oneof locator {
+        // Binary loaded from a cell's data
+        CellDataLocator cell_data = 1;
+
+        // Binary loaded from a dep group
+        DepGroupLocator dep_group = 2;
+
+        // Inline binary data
+        bytes inline_data = 3;
+    }
+}
+
+// CellDataLocator points to binary data in a cell.
+message CellDataLocator {
+    // Cell out_point: tx_hash (32 bytes)
+    bytes tx_hash = 1;
+
+    // Cell out_point: index
+    uint32 index = 2;
+
+    // Offset within cell data
+    uint64 offset = 3;
+
+    // Length of binary data
+    uint64 length = 4;
+}
+
+// DepGroupLocator points to binary in a dep group.
+message DepGroupLocator {
+    // Dep group out_point: tx_hash (32 bytes)
+    bytes tx_hash = 1;
+
+    // Dep group out_point: index
+    uint32 index = 2;
+
+    // Index within the dep group
+    uint32 dep_index = 3;
+}
+
+// TransactionTraces contains all script execution traces for a transaction.
+// This is the top-level container for batched proof of all scripts.
+message TransactionTraces {
+    // Transaction hash being proven (32 bytes)
+    bytes tx_hash = 1;
+
+    // Execution traces for each script group
+    repeated ExecutionTrace script_traces = 2;
+}
+
+// ScriptResult contains the execution result for a single script.
+message ScriptResult {
+    // Script hash that was executed (32 bytes)
+    bytes script_hash = 1;
+
+    // Script group type (Lock = 0, Type = 1)
+    uint32 script_group_type = 2;
+
+    // Exit code from VM execution (must be 0 for valid transaction)
+    int64 exit_code = 3;
+
+    // Cycle count consumed during execution
+    uint64 cycles = 4;
+}
+
+// PublicValues contains data committed by the guest for verification.
+// For batched proof, this includes results for all scripts in the transaction.
+message PublicValues {
+    // Transaction hash that was proven (32 bytes)
+    bytes tx_hash = 1;
+
+    // Exit code from VM execution (legacy single-script field)
+    int64 exit_code = 2;
+
+    // Cycle count consumed during execution (legacy single-script field)
+    uint64 cycles = 3;
+
+    // Results for all scripts (for batched proof)
+    repeated ScriptResult script_results = 4;
+
+    // Total cycles across all scripts
+    uint64 total_cycles = 5;
+}
+
+// ============================================================================
+// The following messages match ckb-vm-contrib's traces.proto format exactly
+// for replay compatibility. We include them here for reference and potential
+// direct use, though the actual replay uses ckb-vm-contrib's types directly.
+// ============================================================================
+
+// Syscalls message - the collection of recorded syscall responses.
+// This matches ckb-vm-contrib/protobuf-ckb-syscalls/proto/traces.proto
+message Syscalls {
+    repeated Syscall syscalls = 1;
+    repeated bytes args = 2;
+}
+
+// Individual syscall response record.
+message Syscall {
+    oneof value {
+        // Syscalls that return only an error code (no data)
+        int64 return_with_code = 1;
+
+        // Successful syscalls returning a u64 (spawn PID, bytes written, etc.)
+        uint64 success_output_data = 2;
+
+        // IO operations returning data buffers
+        IoData io_data = 3;
+
+        // Exec termination marker
+        Terminated terminated = 4;
+
+        // File descriptor information for pipe/inherited FDs
+        Fds fds = 5;
+    }
+}
+
+// Data returned from IO syscalls (load_cell, load_cell_data, etc.)
+message IoData {
+    // Data that fits in the provided buffer
+    bytes available_data = 1;
+
+    // Additional data length beyond what fits in buffer
+    uint64 additional_length = 2;
+}
+
+// Marker for exec syscall termination
+message Terminated {
+}
+
+// File descriptor information
+message Fds {
+    repeated uint64 fds = 1;
+}

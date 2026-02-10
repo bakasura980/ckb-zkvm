@@ -1,0 +1,18 @@
+[package]
+name = "ckb-vm-pprof-protos"
+version.workspace = true
+edition = "2024"
+description = "Crate for generating Rust definitions from pprof proto"
+license = "MIT"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+protobuf-codegen.workspace = true
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+protoc-bin-vendored.workspace = true
+
+[dependencies]
+protobuf.workspace = true

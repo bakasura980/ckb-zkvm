@@ -1,0 +1,34 @@
+[package]
+name = "ckb-zkvm-program-64"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+# SP1 zkVM runtime (Hypercube v6 — 64-bit RISC-V target)
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
+
+# Shared libraries
+ckb-zkvm-lib = { path = "../lib" }
+ckb-zkvm-guest-common = { path = "../guest-common" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+prost = "0.13"
+
+# CKB standard library - syscall traits
+ckb-std = { version = "0.16", default-features = false }
+
+[features]
+default = []
+
+# Patch ckb-vm to use local version (same as main workspace)
+[patch.crates-io]
+ckb-vm = { path = "../ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm.git"]
+ckb-vm = { path = "../ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm-contrib.git"]
+protobuf-ckb-syscalls = { path = "../ckb/ckb-vm-contrib/protobuf-ckb-syscalls" }
+ckb-vm-fuzzing-utils = { path = "../ckb/ckb-vm-contrib/ckb-vm-fuzzing-utils" }

@@ -1,0 +1,592 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+pub mod generated {
+    pub mod traces {
+        use once_cell::sync::Lazy;
+        use prost_reflect::DescriptorPool;
+
+        pub static DESCRIPTOR_POOL: Lazy<DescriptorPool> = Lazy::new(|| {
+            DescriptorPool::decode(include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.bin")).as_ref())
+                .unwrap()
+        });
+
+        include!(concat!(env!("OUT_DIR"), "/generated.traces.rs"));
+    }
+}
+
+use crate::generated::traces;
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
+use ckb_std::{
+    ckb_constants::{CellField, HeaderField, InputField, Place, Source},
+    syscalls::traits::{Bounds, Error, IoResult, SyscallImpls},
+};
+use ckb_vm::SupportMachine;
+use ckb_vm_fuzzing_utils::{CkbvmRunnerImpls, exit_with_panic, flatten_args};
+use core::ffi::CStr;
+use core::marker::PhantomData;
+use prost::Message;
+use spin::Mutex;
+
+pub const UNEXPECTED: u64 = 19;
+pub const UNEXPECTED_ERROR: Error = Error::Other(UNEXPECTED);
+pub const UNEXPECTED_RESULT: IoResult = IoResult::Error(UNEXPECTED_ERROR);
+
+#[cfg(feature = "std")]
+pub fn entry<F>(data: &[u8], f: F) -> i8
+where
+    F: Fn() -> i8 + std::panic::UnwindSafe,
+{
+    let Some(impls) = ProtobufImpls::new_with_bytes(data) else {
+        return UNEXPECTED as i8;
+    };
+    let (argc, argv) = flatten_args(impls.args());
+    let argv = unsafe { core::slice::from_raw_parts(argv.as_ptr() as *const _, argc) };
+    ckb_vm_fuzzing_utils::entry(impls, f, argv)
+}
+
+pub struct ProtobufImpls {
+    syscalls: Mutex<VecDeque<traces::Syscall>>,
+    args: Vec<Vec<u8>>,
+    debug_printer: Box<dyn Fn(&str) + Send + Sync>,
+}
+
+impl ProtobufImpls {
+    fn new(syscalls: traces::Syscalls) -> Option<Self> {
+        Some(Self {
+            syscalls: Mutex::new(syscalls.syscalls.into()),
+            args: syscalls.args,
+            #[allow(unused_variables)]
+            debug_printer: Box::new(|message| {
+                #[cfg(feature = "print-debug-messages")]
+                eprintln!("Script debug message: {}", message);
+            }),
+        })
+    }
+
+    pub fn new_with_bytes<B: AsRef<[u8]>>(bytes: B) -> Option<Self> {
+        #[cfg(feature = "text-format")]
+        let bytes = {
+            let descriptor = crate::generated::traces::DESCRIPTOR_POOL
+                .get_message_by_name("generated.traces.Syscalls")
+                .expect("extracting protobuf message descriptor");
+            let Ok(s) = str::from_utf8(bytes.as_ref()) else {
+                return None;
+            };
+            let Ok(dmessage) = prost_reflect::DynamicMessage::parse_text_format(descriptor, s) else {
+                return None;
+            };
+            let Ok(message) = dmessage.transcode_to::<traces::Syscalls>() else {
+                return None;
+            };
+            message.encode_to_vec()
+        };
+        traces::Syscalls::decode(bytes.as_ref()).ok().and_then(Self::new)
+    }
+
+    #[cfg(feature = "std")]
+    pub fn new_with_file<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
+        Self::new_with_bytes(std::fs::read(path).expect("read trace file"))
+    }
+
+    pub fn args(&self) -> &[Vec<u8>] {
+        &self.args
+    }
+
+    fn syscall(&self) -> Option<traces::syscall::Value> {
+        let mut syscalls = self.syscalls.lock();
+        syscalls.pop_front().and_then(|s| s.value)
+    }
+
+    fn io_syscall(&self, buf: &mut [u8], offset: usize, expected_length: Option<usize>) -> IoResult {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                let Ok(e): Result<Error, _> = (code as u64).try_into() else {
+                    return UNEXPECTED_RESULT;
+                };
+                e.into()
+            }
+            Some(traces::syscall::Value::IoData(io_data)) => {
+                // Total available data (loaded portion + remaining)
+                let total_available = io_data.available_data.len() + io_data.additional_length as usize;
+
+                if let Some(length) = expected_length {
+                    if offset > length {
+                        return UNEXPECTED_RESULT;
+                    }
+                    // Only validate length for full loads (no additional data pending).
+                    // Probe calls (NULL buffer) record empty available_data with
+                    // additional_length indicating the actual data size, so skip
+                    // this check when additional_length > 0.
+                    if io_data.additional_length == 0 && io_data.available_data.len() != length - offset {
+                        return UNEXPECTED_RESULT;
+                    }
+                }
+
+                // Determine how much we can actually copy into the buffer
+                let loaded = core::cmp::min(buf.len(), io_data.available_data.len());
+                let result = if loaded < total_available {
+                    // Partial load: buffer too small or there's additional data
+                    IoResult::PartialLoaded {
+                        loaded,
+                        available: total_available,
+                    }
+                } else {
+                    // Full load: everything fits
+                    IoResult::FullyLoaded(loaded)
+                };
+
+                if loaded > 0 {
+                    buf[0..loaded].copy_from_slice(&io_data.available_data[0..loaded]);
+                }
+                result
+            }
+            _ => UNEXPECTED_RESULT,
+        }
+    }
+}
+
+impl SyscallImpls for ProtobufImpls {
+    fn debug(&self, s: &CStr) {
+        (self.debug_printer)(s.to_str().unwrap_or("utf8 error"));
+    }
+
+    fn exit(&self, code: i8) -> ! {
+        exit_with_panic(code);
+    }
+
+    fn load_cell(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_cell_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        _index: usize,
+        _source: Source,
+        field: CellField,
+    ) -> IoResult {
+        let expected_length = match field {
+            CellField::Capacity => Some(8),
+            CellField::DataHash => Some(32),
+            CellField::LockHash => Some(32),
+            CellField::TypeHash => Some(32),
+            CellField::OccupiedCapacity => Some(8),
+            _ => None,
+        };
+        self.io_syscall(buf, offset, expected_length)
+    }
+
+    fn load_cell_code(
+        &self,
+        _buf_ptr: *mut u8,
+        _len: usize,
+        _content_offset: usize,
+        _content_size: usize,
+        _index: usize,
+        _source: Source,
+    ) -> Result<(), Error> {
+        panic!("Load cell data as code is not suported!");
+    }
+
+    fn load_cell_data(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_header(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_header_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        _index: usize,
+        _source: Source,
+        _field: HeaderField,
+    ) -> IoResult {
+        self.io_syscall(buf, offset, Some(8))
+    }
+
+    fn load_input(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_input_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        _index: usize,
+        _source: Source,
+        field: InputField,
+    ) -> IoResult {
+        let expected_length = match field {
+            InputField::Since => Some(8),
+            _ => None,
+        };
+        self.io_syscall(buf, offset, expected_length)
+    }
+
+    fn load_script(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_script_hash(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.io_syscall(buf, offset, Some(32))
+    }
+
+    fn load_transaction(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn load_tx_hash(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.io_syscall(buf, offset, Some(32))
+    }
+
+    fn load_witness(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+
+    fn vm_version(&self) -> u64 {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => code as u64,
+            _ => UNEXPECTED,
+        }
+    }
+
+    fn current_cycles(&self) -> u64 {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => code as u64,
+            _ => UNEXPECTED,
+        }
+    }
+
+    fn exec(
+        &self,
+        _index: usize,
+        _source: Source,
+        _place: Place,
+        _bounds: Bounds,
+        _argv: &[&CStr],
+    ) -> Result<(), Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::Terminated(_)) => {
+                self.exit(0);
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn spawn(
+        &self,
+        _index: usize,
+        _source: Source,
+        _place: Place,
+        _bounds: Bounds,
+        _argv: &[&CStr],
+        _inherited_fds: &[u64],
+    ) -> Result<u64, Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::SuccessOutputData(output)) => Ok(output),
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn pipe(&self) -> Result<(u64, u64), Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::Fds(fds)) => {
+                if fds.fds.len() != 2 {
+                    return Err(UNEXPECTED_ERROR);
+                }
+                Ok((fds.fds[0], fds.fds[1]))
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn inherited_fds(&self, out_fds: &mut [u64]) -> Result<usize, Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::Fds(fds)) => {
+                let count = core::cmp::min(out_fds.len(), fds.fds.len());
+                out_fds[..count].copy_from_slice(&fds.fds[..count]);
+                Ok(fds.fds.len())
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn read(&self, _fd: u64, buffer: &mut [u8]) -> Result<usize, Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::IoData(io_data)) => {
+                let read = core::cmp::min(io_data.available_data.len(), buffer.len());
+                buffer[0..read].copy_from_slice(&io_data.available_data[0..read]);
+                Ok(read)
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn write(&self, _fd: u64, _buffer: &[u8]) -> Result<usize, Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::SuccessOutputData(output)) => Ok(output as usize),
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn close(&self, _fd: u64) -> Result<(), Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                if code == 0 {
+                    Ok(())
+                } else {
+                    Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+                }
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn wait(&self, _pid: u64) -> Result<i8, Error> {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                Err((code as u64).try_into().unwrap_or(UNEXPECTED_ERROR))
+            }
+            Some(traces::syscall::Value::SuccessOutputData(output)) => Ok(output as i8),
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+
+    fn process_id(&self) -> u64 {
+        match self.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => code as u64,
+            _ => UNEXPECTED,
+        }
+    }
+
+    fn load_block_extension(&self, buf: &mut [u8], offset: usize, _index: usize, _source: Source) -> IoResult {
+        self.io_syscall(buf, offset, None)
+    }
+}
+
+pub struct ProtobufVmRunnerImpls<M> {
+    inner: ProtobufImpls,
+    _marker: PhantomData<M>,
+}
+
+impl<M> ProtobufVmRunnerImpls<M> {
+    pub fn new_with_bytes<B: AsRef<[u8]>>(bytes: B) -> Option<Self> {
+        ProtobufImpls::new_with_bytes(bytes).map(|inner| Self { inner, _marker: PhantomData })
+    }
+
+    #[cfg(feature = "std")]
+    pub fn new_with_file<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
+        ProtobufImpls::new_with_file(path).map(|inner| Self { inner, _marker: PhantomData })
+    }
+
+    pub fn args(&self) -> &[Vec<u8>] {
+        self.inner.args()
+    }
+
+    pub fn set_debug_printer<F>(&mut self, f: F)
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        self.inner.debug_printer = Box::new(f);
+    }
+}
+
+impl<M> SyscallImpls for ProtobufVmRunnerImpls<M> {
+    fn debug(&self, s: &CStr) {
+        self.inner.debug(s);
+    }
+
+    fn exit(&self, code: i8) -> ! {
+        self.inner.exit(code)
+    }
+
+    fn load_cell(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_cell(buf, offset, index, source)
+    }
+
+    fn load_cell_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        index: usize,
+        source: Source,
+        field: CellField,
+    ) -> IoResult {
+        self.inner.load_cell_by_field(buf, offset, index, source, field)
+    }
+
+    fn load_cell_code(
+        &self,
+        buf_ptr: *mut u8,
+        len: usize,
+        content_offset: usize,
+        content_size: usize,
+        index: usize,
+        source: Source,
+    ) -> Result<(), Error> {
+        self.inner.load_cell_code(buf_ptr, len, content_offset, content_size, index, source)
+    }
+
+    fn load_cell_data(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_cell_data(buf, offset, index, source)
+    }
+
+    fn load_header(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_header(buf, offset, index, source)
+    }
+
+    fn load_header_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        index: usize,
+        source: Source,
+        field: HeaderField,
+    ) -> IoResult {
+        self.inner.load_header_by_field(buf, offset, index, source, field)
+    }
+
+    fn load_input(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_input(buf, offset, index, source)
+    }
+
+    fn load_input_by_field(
+        &self,
+        buf: &mut [u8],
+        offset: usize,
+        index: usize,
+        source: Source,
+        field: InputField,
+    ) -> IoResult {
+        self.inner.load_input_by_field(buf, offset, index, source, field)
+    }
+
+    fn load_script(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.inner.load_script(buf, offset)
+    }
+
+    fn load_script_hash(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.inner.load_script_hash(buf, offset)
+    }
+
+    fn load_transaction(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.inner.load_transaction(buf, offset)
+    }
+
+    fn load_tx_hash(&self, buf: &mut [u8], offset: usize) -> IoResult {
+        self.inner.load_tx_hash(buf, offset)
+    }
+
+    fn load_witness(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_witness(buf, offset, index, source)
+    }
+
+    fn vm_version(&self) -> u64 {
+        self.inner.vm_version()
+    }
+
+    fn current_cycles(&self) -> u64 {
+        self.inner.current_cycles()
+    }
+
+    fn exec(&self, index: usize, source: Source, place: Place, bounds: Bounds, argv: &[&CStr]) -> Result<(), Error> {
+        self.inner.exec(index, source, place, bounds, argv)
+    }
+
+    fn spawn(
+        &self,
+        index: usize,
+        source: Source,
+        place: Place,
+        bounds: Bounds,
+        argv: &[&CStr],
+        inherited_fds: &[u64],
+    ) -> Result<u64, Error> {
+        self.inner.spawn(index, source, place, bounds, argv, inherited_fds)
+    }
+
+    fn pipe(&self) -> Result<(u64, u64), Error> {
+        self.inner.pipe()
+    }
+
+    fn inherited_fds(&self, out_fds: &mut [u64]) -> Result<usize, Error> {
+        self.inner.inherited_fds(out_fds)
+    }
+
+    fn read(&self, fd: u64, buffer: &mut [u8]) -> Result<usize, Error> {
+        self.inner.read(fd, buffer)
+    }
+
+    fn write(&self, fd: u64, buffer: &[u8]) -> Result<usize, Error> {
+        self.inner.write(fd, buffer)
+    }
+
+    fn close(&self, fd: u64) -> Result<(), Error> {
+        self.inner.close(fd)
+    }
+
+    fn wait(&self, pid: u64) -> Result<i8, Error> {
+        self.inner.wait(pid)
+    }
+
+    fn process_id(&self) -> u64 {
+        self.inner.process_id()
+    }
+
+    fn load_block_extension(&self, buf: &mut [u8], offset: usize, index: usize, source: Source) -> IoResult {
+        self.inner.load_block_extension(buf, offset, index, source)
+    }
+}
+
+impl<M: SupportMachine> CkbvmRunnerImpls<M> for ProtobufVmRunnerImpls<M> {
+    fn fetch_cell_code(
+        &self,
+        _content_offset: usize,
+        content_size: usize,
+        _index: usize,
+        _source: Source,
+    ) -> Result<Vec<u8>, Error> {
+        match self.inner.syscall() {
+            Some(traces::syscall::Value::ReturnWithCode(code)) => {
+                let Ok(e): Result<Error, _> = (code as u64).try_into() else {
+                    return Err(UNEXPECTED_ERROR);
+                };
+                Err(e)
+            }
+            Some(traces::syscall::Value::IoData(io_data)) => {
+                if io_data.additional_length > 0 {
+                    return Err(UNEXPECTED_ERROR);
+                }
+                if io_data.available_data.len() != content_size {
+                    return Err(UNEXPECTED_ERROR);
+                }
+                Ok(io_data.available_data)
+            }
+            _ => Err(UNEXPECTED_ERROR),
+        }
+    }
+}

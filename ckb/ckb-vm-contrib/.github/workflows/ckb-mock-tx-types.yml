@@ -1,0 +1,21 @@
+name: ckb-mock-tx-types
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths: ["ckb-mock-tx-types/**", "Cargo.toml", "Cargo.lock"]
+  push:
+    branches: [ main ]
+    paths: ["ckb-mock-tx-types/**", "Cargo.toml", "Cargo.lock"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Build
+      run: |
+        cd ckb-mock-tx-types
+        cargo build

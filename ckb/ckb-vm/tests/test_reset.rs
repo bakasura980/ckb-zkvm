@@ -1,0 +1,107 @@
+use bytes::Bytes;
+use ckb_vm::cost_model::constant_cycles;
+#[cfg(has_asm)]
+use ckb_vm::machine::asm::{AsmCoreMachine, AsmMachine};
+use ckb_vm::machine::{DefaultCoreMachine, DefaultMachineBuilder, VERSION1};
+use ckb_vm::{
+    registers::A7, DefaultMachineRunner, Error, Register, SparseMemory, SupportMachine, Syscalls,
+    TraceMachine, WXorXMemory, DEFAULT_STACK_SIZE, ISA_IMC, ISA_MOP, RISCV_MAX_MEMORY,
+};
+
+#[allow(dead_code)]
+mod machine_build;
+
+pub struct CustomSyscall {}
+
+impl<Mac: SupportMachine> Syscalls<Mac> for CustomSyscall {
+    fn initialize(&mut self, _: &mut Mac) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn ecall(&mut self, machine: &mut Mac) -> Result<bool, Error> {
+        let code = &machine.registers()[A7];
+        if code.to_i32() != 1111 {
+            return Ok(false);
+        }
+        let cycles = machine.cycles();
+        machine.reset(machine.max_cycles());
+        machine.set_cycles(cycles);
+        let code_data = std::fs::read("tests/programs/reset_callee").unwrap();
+        let code = Bytes::from(code_data);
+        machine.load_elf(&code, true).unwrap();
+        machine.initialize_stack(
+            [].into_iter(),
+            (RISCV_MAX_MEMORY - DEFAULT_STACK_SIZE) as u64,
+            DEFAULT_STACK_SIZE as u64,
+        )?;
+        Ok(true)
+    }
+}
+
+#[test]
+fn test_reset_int() {
+    let code_data = std::fs::read("tests/programs/reset_caller").unwrap();
+    let code = Bytes::from(code_data);
+
+    let core_machine = DefaultCoreMachine::<u64, WXorXMemory<SparseMemory<u64>>>::new(
+        ISA_IMC | ISA_MOP,
+        VERSION1,
+        u64::MAX,
+    );
+    let mut machine = DefaultMachineBuilder::new(core_machine)
+        .instruction_cycle_func(Box::new(constant_cycles))
+        .syscall(Box::new(CustomSyscall {}))
+        .build();
+    machine.load_program(&code, [].into_iter()).unwrap();
+    let result = machine.run();
+    let cycles = machine.cycles();
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(cycles, 775);
+}
+
+#[test]
+fn test_reset_int_with_trace() {
+    let code_data = std::fs::read("tests/programs/reset_caller").unwrap();
+    let code = Bytes::from(code_data);
+
+    let core_machine = DefaultCoreMachine::<u64, WXorXMemory<SparseMemory<u64>>>::new(
+        ISA_IMC | ISA_MOP,
+        VERSION1,
+        u64::MAX,
+    );
+    let mut machine = TraceMachine::new(
+        DefaultMachineBuilder::new(core_machine)
+            .instruction_cycle_func(Box::new(constant_cycles))
+            .syscall(Box::new(CustomSyscall {}))
+            .build(),
+    );
+    machine.load_program(&code, [].into_iter()).unwrap();
+    let result = machine.run();
+    let cycles = machine.machine.cycles();
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(cycles, 775);
+}
+
+#[test]
+#[cfg(has_asm)]
+fn test_reset_asm() {
+    let code_data = std::fs::read("tests/programs/reset_caller").unwrap();
+    let code = Bytes::from(code_data);
+
+    let asm_core =
+        <Box<AsmCoreMachine> as SupportMachine>::new(ISA_IMC | ISA_MOP, VERSION1, u64::MAX);
+    let core = DefaultMachineBuilder::<Box<AsmCoreMachine>>::new(asm_core)
+        .instruction_cycle_func(Box::new(constant_cycles))
+        .syscall(Box::new(CustomSyscall {}))
+        .build();
+    let mut machine = AsmMachine::new(core);
+    machine.load_program(&code, [].into_iter()).unwrap();
+
+    let result = machine.run();
+    let cycles = machine.machine.cycles();
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(cycles, 775);
+}

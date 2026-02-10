@@ -1,0 +1,1 @@
+Moved to https://github.com/nervosnetwork/ckb-vm-contrib/tree/main/ckb-mock-tx-types

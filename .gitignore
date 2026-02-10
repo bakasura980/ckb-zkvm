@@ -1,0 +1,40 @@
+# Build artifacts (all workspaces)
+**/target/
+
+# ELF binaries
+/elf/
+
+# Output artifacts
+/output/
+*.bin
+*.proof
+
+# Environment / Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Standalone workspace lock files (root Cargo.lock is committed)
+host-64/Cargo.lock
+host-64-parallel/Cargo.lock
+program-64/Cargo.lock
+program-64-parallel/*/Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Debug
+debug/

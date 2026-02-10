@@ -1,0 +1,35 @@
+[workspace]
+
+[package]
+name = "ckb-zkvm-program-64-aggregation"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "SP1 guest program for aggregating per-script CKB proofs"
+
+[dependencies]
+# SP1 zkVM runtime with recursive proof verification
+sp1-zkvm = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1", features = ["verify"] }
+
+# Shared libraries
+ckb-zkvm-lib = { path = "../../lib" }
+
+# SHA256 for public values digest
+sha2 = "0.10"
+
+# Serialization (needed by ckb-zkvm-lib)
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+
+# Patch ckb-vm referenced transitively by ckb-zkvm-lib
+[patch.crates-io]
+ckb-vm = { path = "../../ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm.git"]
+ckb-vm = { path = "../../ckb/ckb-vm" }
+
+[patch."https://github.com/nervosnetwork/ckb-vm-contrib.git"]
+protobuf-ckb-syscalls = { path = "../../ckb/ckb-vm-contrib/protobuf-ckb-syscalls" }
+ckb-vm-fuzzing-utils = { path = "../../ckb/ckb-vm-contrib/ckb-vm-fuzzing-utils" }

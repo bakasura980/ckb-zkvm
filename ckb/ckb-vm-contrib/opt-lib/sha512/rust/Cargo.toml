@@ -1,0 +1,17 @@
+[package]
+name = "ckb-opt-sha512"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Optimized SHA-512 implementation for CKB-VM with Rust bindings"
+repository = "https://github.com/nervosnetwork/ckb-vm-contrib"
+keywords = ["sha512", "ckb", "risc-v", "cryptography"]
+categories = ["cryptography", "no-std"]
+
+[workspace]
+
+[lib]
+name = "ckb_opt_sha512"
+
+[build-dependencies]
+cc = "1.0"

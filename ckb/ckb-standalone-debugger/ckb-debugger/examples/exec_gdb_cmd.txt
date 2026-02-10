@@ -1,0 +1,9 @@
+file exec_caller
+target remote 127.0.0.1:9999
+b __internal_syscall
+c
+c
+file exec_callee
+b _start
+c
+l

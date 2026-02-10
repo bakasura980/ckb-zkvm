@@ -1,0 +1,16 @@
+[package]
+name = "p256"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ckb-std = "0.17.0"
+p256 = { version = "0.13.2", default-features = false, features = ["arithmetic", "ecdsa", "alloc"] }
+
+[[bin]]
+name = "p256_ckbvm"
+path = "src/p256_ckbvm.rs"
+
+[[bin]]
+name = "p256_native"
+path = "src/p256_native.rs"

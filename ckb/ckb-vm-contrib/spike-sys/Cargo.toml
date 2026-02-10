@@ -1,0 +1,12 @@
+[package]
+name = "spike-sys"
+description = "Rust bindings for spike"
+exclude = ["riscv-isa-sim"]
+version = "0.202.0"
+license = "MIT"
+edition = "2024"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+
+[dependencies]
+
+[workspace]

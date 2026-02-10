@@ -1,0 +1,57 @@
+[package]
+name = "ckb-debugger"
+description = "Standalone debugger for Nervos CKB"
+version.workspace = true
+license = "MIT"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+asm = ["ckb-script/asm"]
+
+[dependencies]
+clap = "2.33.0"
+
+ckb-chain-spec.workspace = true
+ckb-hash.workspace = true
+ckb-jsonrpc-types.workspace = true
+ckb-mock-tx-types.workspace = true
+ckb-script.workspace = true
+ckb-traits.workspace = true
+ckb-types.workspace = true
+ckb-vm.workspace = true
+
+ckb-vm-syscall-tracer.workspace = true
+ckb-vm-debug-utils.workspace = true
+ckb-vm-fuzzing-utils.workspace = true
+protobuf-ckb-syscalls.workspace = true
+
+addr2line.workspace = true
+byteorder.workspace = true
+env_logger.workspace = true
+gdbstub.workspace = true
+gdbstub_arch.workspace = true
+goblin.workspace = true
+hex.workspace = true
+libc.workspace = true
+log.workspace = true
+nix.workspace = true
+probe.workspace = true
+prost-reflect.workspace = true
+rand.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_plain.workspace = true
+wasm-bindgen.workspace = true
+web-sys.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+tempfile = "3.20"

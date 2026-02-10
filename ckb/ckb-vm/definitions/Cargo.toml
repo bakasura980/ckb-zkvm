@@ -1,0 +1,21 @@
+[package]
+name = "ckb-vm-definitions"
+description = "Common definition files for CKB VM"
+version = "0.24.14"
+license = "MIT"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2021"
+rust-version = "1.81.0"
+autobins = false
+homepage = "https://github.com/nervosnetwork/ckb-vm"
+repository = "https://github.com/nervosnetwork/ckb-vm"
+
+[features]
+enable-chaos-mode-by-default = []
+
+[[bin]]
+name = "generate_asm_constants"
+path = "src/generate_asm_constants.rs"
+
+[dependencies]
+paste = "1.0"

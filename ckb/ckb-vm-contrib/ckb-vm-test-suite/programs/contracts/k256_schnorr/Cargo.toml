@@ -1,0 +1,16 @@
+[package]
+name = "k256_schnorr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ckb-std = "0.17.0"
+k256 = { version = "=0.13.1", default-features = false, features = ["arithmetic", "schnorr", "alloc"] }
+
+[[bin]]
+name = "k256_schnorr_ckbvm"
+path = "src/k256_schnorr_ckbvm.rs"
+
+[[bin]]
+name = "k256_schnorr_native"
+path = "src/k256_schnorr_native.rs"
