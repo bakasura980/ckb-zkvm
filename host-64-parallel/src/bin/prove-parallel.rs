@@ -10,7 +10,7 @@
 //!
 //! Usage:
 //!   prove-parallel <TX_HASH> [--rpc <URL>] [--output <PATH>]
-//!                             [--no-prove] [--execute-only] [--max-parallel <N>]
+//!                             [--no-prove] [--execute-only] [--num-gpus <N>]
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,8 +19,8 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use sp1_sdk::{
-    Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1Proof,
-    SP1ProofWithPublicValues, SP1Stdin,
+    CudaProver, Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1Proof,
+    SP1ProofWithPublicValues, SP1Stdin, SP1VerifyingKey,
 };
 use tokio::sync::Semaphore;
 use tracing::{info, Level};
@@ -57,9 +57,10 @@ struct Args {
     #[arg(long)]
     no_prove: bool,
 
-    /// Maximum number of parallel SP1 proving tasks
-    #[arg(long, default_value = "4")]
-    max_parallel: usize,
+    /// Number of GPUs for parallel proving (requires SP1_PROVER=cuda).
+    /// Each GPU proves script groups round-robin. Ignored in --no-prove mode.
+    #[arg(long, default_value = "1")]
+    num_gpus: usize,
 }
 
 #[tokio::main]
@@ -77,7 +78,9 @@ async fn main() -> Result<()> {
     info!("=============================================================");
     info!("Transaction: {}", args.tx_hash);
     info!("RPC: {}", args.rpc);
-    info!("Max parallel: {}", args.max_parallel);
+    if args.num_gpus > 1 {
+        info!("GPUs: {} (multi-GPU mode)", args.num_gpus);
+    }
 
     // Load guest ELFs (embedded by build.rs)
     let single_elf: Arc<[u8]> = std::fs::read(env!("SP1_ELF_ckb-zkvm-program-64-parallel"))
@@ -134,16 +137,15 @@ async fn main() -> Result<()> {
         .map(|trace| trace.encode_to_vec())
         .collect();
 
-    // Step 3: Setup SP1 client
-    info!("Step 3: Setting up SP1 client...");
-    let client = ProverClient::from_env().await;
-
     if args.no_prove {
         // Execute-only mode: run each script through SP1 without generating proofs
-        info!("Step 4: Executing {} script groups in parallel (no proof)...", script_count);
+        info!("Step 3: Setting up SP1 client...");
+        let client = ProverClient::from_env().await;
+
+        info!("Step 4: Executing {} script groups sequentially (no proof)...", script_count);
         let start = Instant::now();
 
-        let semaphore = Arc::new(Semaphore::new(args.max_parallel));
+        let semaphore = Arc::new(Semaphore::new(1));
         let client = Arc::new(client);
         let single_elf = single_elf.clone();
 
@@ -212,132 +214,304 @@ async fn main() -> Result<()> {
         std::fs::write(&pv_json_path, &pv_json)?;
         info!("Public values saved to: {}", pv_json_path.display());
     } else {
-        // Full proof generation with aggregation
-        info!("Step 4: Setting up proving key for guest-single...");
-        let single_elf_ref = Elf::Dynamic(single_elf.clone());
-        let single_pk = client
-            .setup(single_elf_ref)
-            .await
-            .context("SP1 setup failed for guest-single")?;
-        let single_vk = single_pk.verifying_key().clone();
-        let single_pk = Arc::new(single_pk);
+        // Full proof generation with aggregation.
+        // Two paths: multi-GPU (CudaProver per device) or single prover (ProverClient).
+        // Both produce the same output types for the shared save-artifacts step.
 
-        // Step 5: Parallel per-script proving
-        info!(
-            "Step 5: Generating {} compressed proofs in parallel (max {} concurrent)...",
-            script_count, args.max_parallel
-        );
-        let start = Instant::now();
+        let (agg_proof, agg_vk): (SP1ProofWithPublicValues, SP1VerifyingKey) =
+            if args.num_gpus > 1 {
+                // ============================================================
+                // Multi-GPU proving path: one CudaProver per physical GPU
+                // ============================================================
+                let num_gpus = args.num_gpus;
 
-        let semaphore = Arc::new(Semaphore::new(args.max_parallel));
-        let client = Arc::new(client);
+                info!("Step 3: Creating {} GPU prover clients...", num_gpus);
+                let mut gpu_provers: Vec<Arc<CudaProver>> = Vec::with_capacity(num_gpus);
+                for device_id in 0..num_gpus {
+                    let prover = ProverClient::builder()
+                        .cuda()
+                        .with_device_id(device_id as u32)
+                        .build()
+                        .await;
+                    info!("  GPU {} prover initialized", device_id);
+                    gpu_provers.push(Arc::new(prover));
+                }
 
-        let mut handles = Vec::with_capacity(individual_traces.len());
+                // Setup proving key on each GPU (same ELF → deterministic,
+                // but each GPU server needs to prepare its own state)
+                info!("Step 4: Setting up proving keys on {} GPUs...", num_gpus);
+                let mut single_pks = Vec::with_capacity(num_gpus);
+                for (device_id, prover) in gpu_provers.iter().enumerate() {
+                    let pk = prover
+                        .setup(Elf::Dynamic(single_elf.clone()))
+                        .await
+                        .with_context(|| format!("SP1 setup failed on GPU {}", device_id))?;
+                    single_pks.push(Arc::new(pk));
+                }
+                let single_vk = single_pks[0].verifying_key().clone();
 
-        for (i, trace_bytes) in individual_traces.into_iter().enumerate() {
-            let sem = semaphore.clone();
-            let client = client.clone();
-            let pk = single_pk.clone();
+                // Parallel per-script proving with round-robin GPU assignment
+                info!(
+                    "Step 5: Generating {} compressed proofs across {} GPUs...",
+                    script_count, num_gpus
+                );
+                let start = Instant::now();
 
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.expect("semaphore closed");
+                // Per-GPU semaphores ensure at most one proof per GPU at a time
+                // (SP1 CUDA prover is single-threaded per device)
+                let gpu_semaphores: Vec<Arc<Semaphore>> = (0..num_gpus)
+                    .map(|_| Arc::new(Semaphore::new(1)))
+                    .collect();
 
-                info!("  Starting proof for script group {}...", i);
-                let prove_start = Instant::now();
+                let mut handles = Vec::with_capacity(individual_traces.len());
 
-                let mut stdin = SP1Stdin::new();
-                stdin.write(&trace_bytes);
+                for (i, trace_bytes) in individual_traces.into_iter().enumerate() {
+                    let gpu_idx = i % num_gpus;
+                    let sem = gpu_semaphores[gpu_idx].clone();
+                    let prover = gpu_provers[gpu_idx].clone();
+                    let pk = single_pks[gpu_idx].clone();
 
-                let proof = client
-                    .prove(&pk, stdin)
-                    .compressed()
-                    .await
-                    .with_context(|| format!("proof generation failed for script group {}", i))?;
+                    handles.push(tokio::spawn(async move {
+                        let _permit = sem.acquire().await.expect("semaphore closed");
+
+                        info!("  Starting proof for script group {} on GPU {}...", i, gpu_idx);
+                        let prove_start = Instant::now();
+
+                        let mut stdin = SP1Stdin::new();
+                        stdin.write(&trace_bytes);
+
+                        let proof = prover
+                            .prove(&pk, stdin)
+                            .compressed()
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "proof generation failed for script group {} on GPU {}",
+                                    i, gpu_idx
+                                )
+                            })?;
+
+                        info!(
+                            "  Script group {} proved on GPU {} in {:?}",
+                            i, gpu_idx, prove_start.elapsed()
+                        );
+
+                        Ok::<(usize, SP1ProofWithPublicValues), anyhow::Error>((i, proof))
+                    }));
+                }
+
+                // Collect proof results
+                let mut proof_results: Vec<(usize, SP1ProofWithPublicValues)> =
+                    Vec::with_capacity(handles.len());
+                for handle in handles {
+                    let result = handle.await.context("proving task panicked")??;
+                    proof_results.push(result);
+                }
+                proof_results.sort_by_key(|(idx, _)| *idx);
 
                 info!(
-                    "  Script group {} proved in {:?}",
-                    i,
-                    prove_start.elapsed()
+                    "All {} compressed proofs generated across {} GPUs in {:?}",
+                    script_count, num_gpus, start.elapsed()
                 );
 
-                Ok::<(usize, SP1ProofWithPublicValues), anyhow::Error>((i, proof))
-            }));
-        }
+                // Log per-script results
+                info!("Per-script proof results:");
+                for (idx, proof) in &proof_results {
+                    let spv =
+                        SingleScriptPublicValues::from_bytes(proof.public_values.as_slice())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "failed to decode public values for script group {}",
+                                    idx
+                                )
+                            })?;
+                    log_single_pv(*idx, &spv);
+                }
 
-        // Collect proof results
-        let mut proof_results: Vec<(usize, SP1ProofWithPublicValues)> =
-            Vec::with_capacity(handles.len());
-        for handle in handles {
-            let result = handle.await.context("proving task panicked")??;
-            proof_results.push(result);
-        }
-        proof_results.sort_by_key(|(idx, _)| *idx);
+                // Aggregation on GPU 0
+                info!("Step 6: Setting up aggregation proving key on GPU 0...");
+                let agg_pk = gpu_provers[0]
+                    .setup(Elf::Dynamic(aggregation_elf.clone()))
+                    .await
+                    .context("SP1 setup failed for guest-aggregation")?;
 
-        info!(
-            "All {} compressed proofs generated in {:?}",
-            script_count,
-            start.elapsed()
-        );
+                info!("Step 7: Aggregating {} proofs on GPU 0...", script_count);
+                let start = Instant::now();
 
-        // Log per-script results
-        info!("Per-script proof results:");
-        for (idx, proof) in &proof_results {
-            let spv = SingleScriptPublicValues::from_bytes(proof.public_values.as_slice())
-                .ok_or_else(|| anyhow!("failed to decode public values for script group {}", idx))?;
-            log_single_pv(*idx, &spv);
-        }
+                let vkeys: Vec<[u32; 8]> = proof_results
+                    .iter()
+                    .map(|_| single_vk.hash_u32())
+                    .collect();
 
-        // Step 6: Setup aggregation proving key
-        info!("Step 6: Setting up aggregation proving key...");
-        let agg_elf = Elf::Dynamic(aggregation_elf.clone());
+                let all_public_values: Vec<Vec<u8>> = proof_results
+                    .iter()
+                    .map(|(_, proof)| proof.public_values.to_vec())
+                    .collect();
 
-        let agg_pk = client
-            .setup(agg_elf)
-            .await
-            .context("SP1 setup failed for guest-aggregation")?;
+                let mut agg_stdin = SP1Stdin::new();
+                agg_stdin.write(&vkeys);
+                agg_stdin.write(&all_public_values);
 
-        // Step 7: Aggregation
-        info!("Step 7: Aggregating {} proofs...", script_count);
-        let start = Instant::now();
+                for (idx, proof) in &proof_results {
+                    let SP1Proof::Compressed(ref inner) = proof.proof else {
+                        return Err(anyhow!(
+                            "expected compressed proof for script group {}, got different type",
+                            idx
+                        ));
+                    };
+                    agg_stdin.write_proof(*inner.clone(), single_vk.vk.clone());
+                }
 
-        // Collect vkeys (all the same since all use the same guest-single program)
-        let vkeys: Vec<[u32; 8]> = proof_results
-            .iter()
-            .map(|_| single_vk.hash_u32())
-            .collect();
+                let agg_proof = gpu_provers[0]
+                    .prove(&agg_pk, agg_stdin)
+                    .compressed()
+                    .await
+                    .context("aggregation proof generation failed")?;
 
-        // Collect raw public values
-        let all_public_values: Vec<Vec<u8>> = proof_results
-            .iter()
-            .map(|(_, proof)| proof.public_values.to_vec())
-            .collect();
+                info!("Aggregation completed in {:?}", start.elapsed());
 
-        // Build aggregation stdin
-        let mut agg_stdin = SP1Stdin::new();
-        agg_stdin.write(&vkeys);
-        agg_stdin.write(&all_public_values);
+                let agg_vk = agg_pk.verifying_key().clone();
+                (agg_proof, agg_vk)
+            } else {
+                // ============================================================
+                // Single prover path (CPU, single-GPU, mock, or network)
+                // ============================================================
+                info!("Step 3: Setting up SP1 client...");
+                let client = ProverClient::from_env().await;
 
-        // Write each compressed proof for deferred verification
-        for (idx, proof) in &proof_results {
-            let SP1Proof::Compressed(ref inner) = proof.proof else {
-                return Err(anyhow!(
-                    "expected compressed proof for script group {}, got different type",
-                    idx
-                ));
+                info!("Step 4: Setting up proving key for guest-single...");
+                let single_elf_ref = Elf::Dynamic(single_elf.clone());
+                let single_pk = client
+                    .setup(single_elf_ref)
+                    .await
+                    .context("SP1 setup failed for guest-single")?;
+                let single_vk = single_pk.verifying_key().clone();
+                let single_pk = Arc::new(single_pk);
+
+                // Parallel per-script proving
+                info!(
+                    "Step 5: Generating {} compressed proofs sequentially...",
+                    script_count
+                );
+                let start = Instant::now();
+
+                let semaphore = Arc::new(Semaphore::new(1));
+                let client = Arc::new(client);
+
+                let mut handles = Vec::with_capacity(individual_traces.len());
+
+                for (i, trace_bytes) in individual_traces.into_iter().enumerate() {
+                    let sem = semaphore.clone();
+                    let client = client.clone();
+                    let pk = single_pk.clone();
+
+                    handles.push(tokio::spawn(async move {
+                        let _permit = sem.acquire().await.expect("semaphore closed");
+
+                        info!("  Starting proof for script group {}...", i);
+                        let prove_start = Instant::now();
+
+                        let mut stdin = SP1Stdin::new();
+                        stdin.write(&trace_bytes);
+
+                        let proof = client
+                            .prove(&pk, stdin)
+                            .compressed()
+                            .await
+                            .with_context(|| {
+                                format!("proof generation failed for script group {}", i)
+                            })?;
+
+                        info!(
+                            "  Script group {} proved in {:?}",
+                            i,
+                            prove_start.elapsed()
+                        );
+
+                        Ok::<(usize, SP1ProofWithPublicValues), anyhow::Error>((i, proof))
+                    }));
+                }
+
+                // Collect proof results
+                let mut proof_results: Vec<(usize, SP1ProofWithPublicValues)> =
+                    Vec::with_capacity(handles.len());
+                for handle in handles {
+                    let result = handle.await.context("proving task panicked")??;
+                    proof_results.push(result);
+                }
+                proof_results.sort_by_key(|(idx, _)| *idx);
+
+                info!(
+                    "All {} compressed proofs generated in {:?}",
+                    script_count,
+                    start.elapsed()
+                );
+
+                // Log per-script results
+                info!("Per-script proof results:");
+                for (idx, proof) in &proof_results {
+                    let spv =
+                        SingleScriptPublicValues::from_bytes(proof.public_values.as_slice())
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "failed to decode public values for script group {}",
+                                    idx
+                                )
+                            })?;
+                    log_single_pv(*idx, &spv);
+                }
+
+                // Setup aggregation proving key
+                info!("Step 6: Setting up aggregation proving key...");
+                let agg_elf = Elf::Dynamic(aggregation_elf.clone());
+
+                let agg_pk = client
+                    .setup(agg_elf)
+                    .await
+                    .context("SP1 setup failed for guest-aggregation")?;
+
+                // Aggregation
+                info!("Step 7: Aggregating {} proofs...", script_count);
+                let start = Instant::now();
+
+                let vkeys: Vec<[u32; 8]> = proof_results
+                    .iter()
+                    .map(|_| single_vk.hash_u32())
+                    .collect();
+
+                let all_public_values: Vec<Vec<u8>> = proof_results
+                    .iter()
+                    .map(|(_, proof)| proof.public_values.to_vec())
+                    .collect();
+
+                let mut agg_stdin = SP1Stdin::new();
+                agg_stdin.write(&vkeys);
+                agg_stdin.write(&all_public_values);
+
+                for (idx, proof) in &proof_results {
+                    let SP1Proof::Compressed(ref inner) = proof.proof else {
+                        return Err(anyhow!(
+                            "expected compressed proof for script group {}, got different type",
+                            idx
+                        ));
+                    };
+                    agg_stdin.write_proof(*inner.clone(), single_vk.vk.clone());
+                }
+
+                let agg_proof = client
+                    .prove(&agg_pk, agg_stdin)
+                    .compressed()
+                    .await
+                    .context("aggregation proof generation failed")?;
+
+                info!("Aggregation completed in {:?}", start.elapsed());
+
+                let agg_vk = agg_pk.verifying_key().clone();
+                (agg_proof, agg_vk)
             };
-            agg_stdin.write_proof(*inner.clone(), single_vk.vk.clone());
-        }
 
-        let agg_proof = client
-            .prove(&agg_pk, agg_stdin)
-            .compressed()
-            .await
-            .context("aggregation proof generation failed")?;
-
-        info!("Aggregation completed in {:?}", start.elapsed());
-
-        // Step 8: Extract public values and save artifacts
-        info!("Step 8: Saving artifacts...");
+        // Save artifacts (shared by both proving paths)
+        info!("Saving artifacts...");
 
         let public_values = PublicValues::from_bytes(agg_proof.public_values.as_slice())
             .ok_or_else(|| anyhow!("failed to decode aggregated public values"))?;
@@ -350,7 +524,6 @@ async fn main() -> Result<()> {
         std::fs::write(&proof_path, &proof_bytes).context("failed to write proof")?;
         info!("Proof saved to: {}", proof_path.display());
 
-        let agg_vk = agg_pk.verifying_key().clone();
         let vk_path = args.output.join("vkey.bin");
         let vk_bytes =
             bincode::serialize(&agg_vk).context("failed to serialize verifying key")?;

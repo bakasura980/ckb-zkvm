@@ -33,7 +33,7 @@ ckb-zkvm/
 │   ├── script-prover/            # SP1 v6 per-script guest
 │   └── aggregation/              # SP1 v6 aggregation guest
 ├── host/                         # Host binaries (SP1 v4): prove, verify, vkey, scan
-├── host-64/                      # Host binaries (SP1 v6): prove-v6
+├── host-64/                      # Host binaries (SP1 v6): prove-v6, verify-v6
 ├── host-64-parallel/             # Host binaries (SP1 v6 parallel): prove-parallel, verify-parallel
 └── ckb/                          # Local forks: ckb-vm, ckb-vm-contrib, ckb-standalone-debugger
 ```
@@ -93,8 +93,12 @@ cd host-64
 # Execute (no proof)
 SP1_PROVER=mock cargo run --release --bin prove-v6 -- <TX_HASH> --no-prove --rpc <RPC_URL>
 
-# Generate a proof
+# Generate a proof (outputs proof.bin, vkey.bin, public_values.json)
 cargo run --release --bin prove-v6 -- <TX_HASH> --rpc <RPC_URL> -o ./output
+
+# Verify the proof
+cargo run --release --bin verify-v6 -- ./output/proof.bin
+cargo run --release --bin verify-v6 -- ./output/proof.bin --expected-hash <TX_HASH>
 ```
 
 ### SP1 v6 Parallel
@@ -135,7 +139,23 @@ Options for `prove-parallel`:
 | `-o, --output <PATH>` | `./output` | Output directory for artifacts |
 | `--no-prove` | — | Run SP1 guest execution without proof generation |
 | `--execute-only` | — | Skip SP1 entirely (host-side trace collection only) |
-| `--max-parallel <N>` | `4` | Max concurrent SP1 proving tasks |
+| `--num-gpus <N>` | `1` | Number of GPUs for parallel proving (requires `SP1_PROVER=cuda`) |
+
+#### Multi-GPU Proving
+
+When multiple NVIDIA GPUs are available, the parallel prover can distribute script groups across GPUs for true parallelism. Each GPU runs its own `sp1-gpu-server` on a separate Unix socket (`/tmp/sp1-cuda-{id}.sock`).
+
+```bash
+cd host-64-parallel
+
+# 2 GPUs — script groups assigned round-robin (script 0 → GPU 0, script 1 → GPU 1, etc.)
+SP1_PROVER=cuda cargo run --release --bin prove-parallel -- <TX_HASH> --num-gpus 2 --rpc <RPC_URL>
+
+# 4 GPUs
+SP1_PROVER=cuda cargo run --release --bin prove-parallel -- <TX_HASH> --num-gpus 4 --rpc <RPC_URL>
+```
+
+Each GPU processes at most one proof at a time (per-GPU semaphores). Aggregation runs on GPU 0 after all per-script proofs complete.
 
 ### Other Tools
 
