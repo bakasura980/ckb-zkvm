@@ -218,6 +218,8 @@ async fn main() -> Result<()> {
         // Two paths: multi-GPU (CudaProver per device) or single prover (ProverClient).
         // Both produce the same output types for the shared save-artifacts step.
 
+        let proving_start = Instant::now();
+
         let (agg_proof, agg_vk): (SP1ProofWithPublicValues, SP1VerifyingKey) =
             if args.num_gpus > 1 {
                 // ============================================================
@@ -509,6 +511,8 @@ async fn main() -> Result<()> {
                 let agg_vk = agg_pk.verifying_key().clone();
                 (agg_proof, agg_vk)
             };
+
+        info!("Total proving time: {:?} (setup + per-script proofs + aggregation)", proving_start.elapsed());
 
         // Save artifacts (shared by both proving paths)
         info!("Saving artifacts...");
