@@ -330,7 +330,7 @@ async fn main() -> Result<()> {
 
         let agg_proof = client
             .prove(&agg_pk, agg_stdin)
-            .core()
+            .compressed()
             .await
             .context("aggregation proof generation failed")?;
 

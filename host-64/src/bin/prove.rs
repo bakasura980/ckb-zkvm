@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sp1_sdk::{Elf, ProveRequest, Prover, ProverClient, SP1Stdin};
+use sp1_sdk::{Elf, ProveRequest, Prover, ProverClient, ProvingKey, SP1Stdin};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -171,6 +171,7 @@ async fn main() -> Result<()> {
             .setup(elf)
             .await
             .context("SP1 setup failed")?;
+        let vk = pk.verifying_key().clone();
 
         info!("Step 4: Generating proof (this may take a while)...");
         let start = Instant::now();
@@ -183,8 +184,8 @@ async fn main() -> Result<()> {
 
         info!("Proof generated in {:?}", start.elapsed());
 
-        // Extract and verify public values
-        info!("Step 5: Verifying proof...");
+        // Extract public values
+        info!("Step 5: Decoding public values...");
 
         let public_values_bytes = proof.public_values.as_slice();
         let public_values = PublicValues::from_bytes(public_values_bytes)
@@ -192,15 +193,28 @@ async fn main() -> Result<()> {
 
         log_public_values(&public_values);
 
-        info!("Proof generated successfully!");
+        // Verify proof
+        info!("Step 6: Verifying proof...");
+        let start = Instant::now();
+
+        client
+            .verify(&proof, &vk, None)
+            .context("proof verification failed")?;
+
+        info!("Proof verified in {:?}", start.elapsed());
 
         // Save artifacts
-        info!("Step 6: Saving artifacts...");
+        info!("Step 7: Saving artifacts...");
 
         let proof_path = args.output.join("proof.bin");
         let proof_bytes = bincode::serialize(&proof).context("failed to serialize proof")?;
         std::fs::write(&proof_path, &proof_bytes).context("failed to write proof")?;
         info!("Proof saved to: {}", proof_path.display());
+
+        let vkey_path = args.output.join("vkey.bin");
+        let vkey_bytes = bincode::serialize(&vk).context("failed to serialize vkey")?;
+        std::fs::write(&vkey_path, &vkey_bytes).context("failed to write vkey")?;
+        info!("Verifying key saved to: {}", vkey_path.display());
 
         let pv_json_path = args.output.join("public_values.json");
         let pv_json = serde_json::to_string_pretty(&public_values)?;

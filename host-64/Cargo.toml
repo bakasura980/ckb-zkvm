@@ -10,6 +10,10 @@ license = "MIT"
 name = "prove-v6"
 path = "src/bin/prove.rs"
 
+[[bin]]
+name = "verify-v6"
+path = "src/bin/verify.rs"
+
 [dependencies]
 # Shared libraries
 ckb-zkvm-lib = { path = "../lib" }
