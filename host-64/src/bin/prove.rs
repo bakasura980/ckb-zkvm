@@ -164,6 +164,7 @@ async fn main() -> Result<()> {
         info!("Public values saved to: {}", pv_json_path.display());
     } else {
         // Full proof generation
+        let proving_start = Instant::now();
         let elf = Elf::Dynamic(guest_elf.clone());
 
         info!("Step 3: Setting up proving key...");
@@ -202,6 +203,8 @@ async fn main() -> Result<()> {
             .context("proof verification failed")?;
 
         info!("Proof verified in {:?}", start.elapsed());
+
+        info!("Total proving time: {:?} (setup + proof + verify)", proving_start.elapsed());
 
         // Save artifacts
         info!("Step 7: Saving artifacts...");
