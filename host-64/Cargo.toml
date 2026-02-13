@@ -20,7 +20,7 @@ ckb-zkvm-lib = { path = "../lib" }
 ckb-zkvm-host-common = { path = "../host-common" }
 
 # SP1 SDK — Hypercube v6 (64-bit RISC-V)
-sp1-sdk = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1" }
+sp1-sdk = { git = "https://github.com/succinctlabs/sp1", tag = "v6.0.0-beta.1", features = ["network"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
