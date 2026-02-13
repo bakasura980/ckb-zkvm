@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sp1_sdk::{Elf, ProveRequest, Prover, ProverClient, ProvingKey, SP1Stdin};
+use sp1_sdk::{Elf, ProveRequest, Prover, ProverClient, ProvingKey, SP1ProofWithPublicValues, SP1Stdin};
+use sp1_sdk::network::proto::types::ProofMode;
+use sp1_cluster_utils::{request_proof_from_env, ClusterElf};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -48,6 +50,15 @@ struct Args {
     /// Run the SP1 guest program without generating a proof
     #[arg(long)]
     no_prove: bool,
+
+    /// Submit proof to a local sp1-cluster for distributed GPU proving
+    ///
+    /// Requires CLI_CLUSTER_RPC and CLI_REDIS_NODES env vars to be set.
+    /// Example:
+    ///   CLI_CLUSTER_RPC=http://localhost:50051
+    ///   CLI_REDIS_NODES=redis://:redispassword@localhost:6379/0
+    #[arg(long)]
+    cluster: bool,
 }
 
 fn log_public_values(pv: &PublicValues) {
@@ -130,81 +141,76 @@ async fn main() -> Result<()> {
     let mut stdin = SP1Stdin::new();
     stdin.write(&trace_bytes);
 
+    // Save SP1 artifacts for external proving (e.g. sp1-cluster)
+    let stdin_path = args.output.join("stdin.bin");
+    let stdin_bytes = bincode::serialize(&stdin).context("failed to serialize stdin")?;
+    std::fs::write(&stdin_path, &stdin_bytes).context("failed to write stdin")?;
+    info!("SP1 stdin saved to: {} ({} bytes)", stdin_path.display(), stdin_bytes.len());
+
+    let elf_path = args.output.join("guest.elf");
+    std::fs::copy(&args.elf, &elf_path).context("failed to copy ELF")?;
+    info!("Guest ELF saved to: {}", elf_path.display());
+
     if args.execute_only {
         info!("Execute-only mode: skipping SP1 execution");
         return Ok(());
     }
 
-    // Step 3: Run SP1 guest program (v6 async API)
-    let client = ProverClient::from_env().await;
-
-    if args.no_prove {
-        // Execute the guest program without proof generation
-        info!("Step 3: Executing SP1 guest program (no proof)...");
-        let start = Instant::now();
-
-        let elf = Elf::Dynamic(guest_elf.clone());
-        let (public_values_raw, report) = client
-            .execute(elf, stdin)
-            .await
-            .context("SP1 execution failed")?;
-
-        info!("SP1 execution completed in {:?}", start.elapsed());
-        info!("  SP1 cycles: {}", report.total_instruction_count());
-
-        let public_values = PublicValues::from_bytes(public_values_raw.as_slice())
-            .context("failed to decode public values")?;
-
-        log_public_values(&public_values);
-
-        // Save public values as JSON
-        let pv_json_path = args.output.join("public_values.json");
-        let pv_json = serde_json::to_string_pretty(&public_values)?;
-        std::fs::write(&pv_json_path, &pv_json)?;
-        info!("Public values saved to: {}", pv_json_path.display());
-    } else {
-        // Full proof generation
+    if args.cluster {
+        // Cluster mode: submit to local sp1-cluster for distributed GPU proving
         let proving_start = Instant::now();
-        let elf = Elf::Dynamic(guest_elf.clone());
 
+        // Setup VK locally (needed for verification after cluster returns proof)
         info!("Step 3: Setting up proving key...");
+        let client = ProverClient::from_env().await;
+        let elf = Elf::Dynamic(guest_elf.clone());
         let pk = client
             .setup(elf)
             .await
             .context("SP1 setup failed")?;
         let vk = pk.verifying_key().clone();
 
-        info!("Step 4: Generating proof (this may take a while)...");
+        // Submit proof to the cluster
+        info!("Step 4: Submitting proof to cluster (shard-parallel)...");
         let start = Instant::now();
 
-        let proof = client
-            .prove(&pk, stdin)
-            .compressed()
-            .await
-            .context("proof generation failed")?;
+        let result = request_proof_from_env(
+            ProofMode::Compressed,
+            4,
+            ClusterElf::NewElf(guest_elf.to_vec()),
+            stdin,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("{:#}", e))?;
 
-        info!("Proof generated in {:?}", start.elapsed());
+        info!(
+            "Cluster proof completed in {:?} (proof_id: {})",
+            start.elapsed(),
+            result.proof_id
+        );
+
+        // Convert cluster proof to SP1ProofWithPublicValues
+        let proof = SP1ProofWithPublicValues::from(result.proof);
 
         // Extract public values
         info!("Step 5: Decoding public values...");
-
         let public_values_bytes = proof.public_values.as_slice();
         let public_values = PublicValues::from_bytes(public_values_bytes)
             .context("failed to decode public values")?;
-
         log_public_values(&public_values);
 
-        // Verify proof
+        // Verify proof locally
         info!("Step 6: Verifying proof...");
         let start = Instant::now();
-
         client
             .verify(&proof, &vk, None)
             .context("proof verification failed")?;
-
         info!("Proof verified in {:?}", start.elapsed());
 
-        info!("Total proving time: {:?} (setup + proof + verify)", proving_start.elapsed());
+        info!(
+            "Total proving time: {:?} (setup + cluster + verify)",
+            proving_start.elapsed()
+        );
 
         // Save artifacts
         info!("Step 7: Saving artifacts...");
@@ -223,6 +229,96 @@ async fn main() -> Result<()> {
         let pv_json = serde_json::to_string_pretty(&public_values)?;
         std::fs::write(&pv_json_path, &pv_json)?;
         info!("Public values saved to: {}", pv_json_path.display());
+    } else {
+        // Local mode: prove on this machine
+        let client = ProverClient::from_env().await;
+
+        if args.no_prove {
+            // Execute the guest program without proof generation
+            info!("Step 3: Executing SP1 guest program (no proof)...");
+            let start = Instant::now();
+
+            let elf = Elf::Dynamic(guest_elf.clone());
+            let (public_values_raw, report) = client
+                .execute(elf, stdin)
+                .await
+                .context("SP1 execution failed")?;
+
+            info!("SP1 execution completed in {:?}", start.elapsed());
+            info!("  SP1 cycles: {}", report.total_instruction_count());
+
+            let public_values = PublicValues::from_bytes(public_values_raw.as_slice())
+                .context("failed to decode public values")?;
+
+            log_public_values(&public_values);
+
+            // Save public values as JSON
+            let pv_json_path = args.output.join("public_values.json");
+            let pv_json = serde_json::to_string_pretty(&public_values)?;
+            std::fs::write(&pv_json_path, &pv_json)?;
+            info!("Public values saved to: {}", pv_json_path.display());
+        } else {
+            // Full proof generation
+            let proving_start = Instant::now();
+            let elf = Elf::Dynamic(guest_elf.clone());
+
+            info!("Step 3: Setting up proving key...");
+            let pk = client
+                .setup(elf)
+                .await
+                .context("SP1 setup failed")?;
+            let vk = pk.verifying_key().clone();
+
+            info!("Step 4: Generating proof (this may take a while)...");
+            let start = Instant::now();
+
+            let proof = client
+                .prove(&pk, stdin)
+                .compressed()
+                .await
+                .context("proof generation failed")?;
+
+            info!("Proof generated in {:?}", start.elapsed());
+
+            // Extract public values
+            info!("Step 5: Decoding public values...");
+
+            let public_values_bytes = proof.public_values.as_slice();
+            let public_values = PublicValues::from_bytes(public_values_bytes)
+                .context("failed to decode public values")?;
+
+            log_public_values(&public_values);
+
+            // Verify proof
+            info!("Step 6: Verifying proof...");
+            let start = Instant::now();
+
+            client
+                .verify(&proof, &vk, None)
+                .context("proof verification failed")?;
+
+            info!("Proof verified in {:?}", start.elapsed());
+
+            info!("Total proving time: {:?} (setup + proof + verify)", proving_start.elapsed());
+
+            // Save artifacts
+            info!("Step 7: Saving artifacts...");
+
+            let proof_path = args.output.join("proof.bin");
+            let proof_bytes = bincode::serialize(&proof).context("failed to serialize proof")?;
+            std::fs::write(&proof_path, &proof_bytes).context("failed to write proof")?;
+            info!("Proof saved to: {}", proof_path.display());
+
+            let vkey_path = args.output.join("vkey.bin");
+            let vkey_bytes = bincode::serialize(&vk).context("failed to serialize vkey")?;
+            std::fs::write(&vkey_path, &vkey_bytes).context("failed to write vkey")?;
+            info!("Verifying key saved to: {}", vkey_path.display());
+
+            let pv_json_path = args.output.join("public_values.json");
+            let pv_json = serde_json::to_string_pretty(&public_values)?;
+            std::fs::write(&pv_json_path, &pv_json)?;
+            info!("Public values saved to: {}", pv_json_path.display());
+        }
     }
 
     info!("=====================================================");
