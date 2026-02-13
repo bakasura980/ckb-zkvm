@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
 
         let proof = client
             .prove(&pk, stdin)
-            .core()
+            .compressed()
             .await
             .context("proof generation failed")?;
 
